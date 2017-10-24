@@ -41,6 +41,12 @@
  * For more info on this and all of my stuff, mail edjames@berkeley.edu.
  */
 
+/*
+ * Color support and plane direction vectors added by Oliver B <oliver.77.b@gmail.com>
+ * Coded and uploaded on 24/Oct/2017
+ * No has_colors(); check performed: use this program on color terminals...
+ */
+
 #include <sys/cdefs.h>
 #ifndef lint
 #if 0
@@ -59,6 +65,28 @@ __RCSID("$NetBSD: graphics.c,v 1.10 2003/08/07 09:36:54 agc Exp $");
 #define C_BACKROUND		'.'
 #define C_BEACON		'*'
 #define C_CREDIT		'*'
+
+/* COLOR_PAIR ID for the screen elements.
+ * Frame, "Grass" is Radar background, Flight Routes
+ * Navigation points are blue background: Exits, Airports, beacons
+ * Four plane colors: "PR" is for prop, "JT" is for Jet, "_1" is for marked, "_0" is for unmarked.
+ * Fuel warning color and list header for the right side pane, and then the direction vector colors
+ */
+
+#define COL_FRAME 1
+#define COL_GRASS 2
+#define COL_ROUTE 3
+#define COL_EXIT  4
+#define COL_AIRPT 5
+#define COL_BEACN 6
+#define COL_PL_PR_1 7
+#define COL_PL_JT_1 8
+#define COL_PL_PR_0 9
+#define COL_PL_JT_0 10
+#define COL_FUEL  11
+#define COL_HEAD  12
+#define COL_VECTR_PR 13
+#define COL_VECTR_JT 14
 
 WINDOW	*radar, *cleanradar, *credit, *input, *planes;
 
@@ -79,14 +107,22 @@ void
 erase_all()
 {
 	PLANE	*pp;
+	int dx,dy;
 
+// In case of erasing a plane from the radar a bigger area needs to be cleaned because of the speed vector...
 	for (pp = air.head; pp != NULL; pp = pp->next) {
-		wmove(cleanradar, pp->ypos, pp->xpos * 2);
-		wmove(radar, pp->ypos, pp->xpos * 2);
-		waddch(radar, winch(cleanradar));
-		wmove(cleanradar, pp->ypos, pp->xpos * 2 + 1);
-		wmove(radar, pp->ypos, pp->xpos * 2 + 1);
-		waddch(radar, winch(cleanradar));
+		for (dx=-1; dx<2; dx++) {
+			for (dy=-1; dy<2; dy++) {
+				if ((pp->xpos+dx >= 0) && (pp->xpos+dx < sp->width) && (pp->ypos+dy >= 0) && (pp->ypos+dy < sp->height)) {
+					wmove(cleanradar, pp->ypos+dy, (pp->xpos +dx)*2);
+					wmove(radar, pp->ypos+dy, (pp->xpos+dx)*2);
+					waddch(radar, winch(cleanradar));
+					wmove(cleanradar, pp->ypos+dy, (pp->xpos +dx)*2+1);
+					wmove(radar, pp->ypos+dy, (pp->xpos+dx)*2+1);
+					waddch(radar, winch(cleanradar));
+				}
+			}
+		}
 	}
 }
 
@@ -94,15 +130,46 @@ void
 draw_all()
 {
 	PLANE	*pp;
+  char myname[5];
 
 	for (pp = air.head; pp != NULL; pp = pp->next) {
-		if (pp->status == S_MARKED)
-			wstandout(radar);
+// Decide plane color and print name first
+		sprintf(myname,"%c",name(pp));
+		if (pp->status == S_MARKED) {
+			if ((myname[0] > 64) && (myname[0] < 91)) {
+				wattron(radar, COLOR_PAIR(COL_PL_PR_1)|A_BOLD);
+			} else {
+				wattron(radar, COLOR_PAIR(COL_PL_JT_1)|A_BOLD);
+			}
+		} else {
+			if ((myname[0] > 64) && (myname[0] < 91)) {
+				wattron(radar, COLOR_PAIR(COL_PL_PR_0));
+			} else {
+				wattron(radar, COLOR_PAIR(COL_PL_JT_0));
+			}
+		}
 		wmove(radar, pp->ypos, pp->xpos * 2);
 		waddch(radar, name(pp));
 		waddch(radar, '0' + pp->altitude);
-		if (pp->status == S_MARKED)
-			wstandend(radar);
+// Decide color for the direction vector
+		if ((myname[0] > 64) && (myname[0] < 91)) {
+			wattron(radar, COLOR_PAIR(COL_VECTR_PR));
+		} else {
+			wattron(radar, COLOR_PAIR(COL_VECTR_JT));
+		}
+// Based on plane direction go to appropriate position and print the appropriate char as a speed vector
+		switch (pp->dir) {
+			case 0: wmove(radar, pp->ypos-1, pp->xpos*2  ); waddch(radar, '|'); break;
+			case 1: wmove(radar, pp->ypos-1, pp->xpos*2+2); waddch(radar, '/'); break;
+			case 2:                     waddch(radar, '-'); waddch(radar, '-'); break;
+			case 3: wmove(radar, pp->ypos+1, pp->xpos*2+2); waddch(radar, '\\'); break;
+			case 4: wmove(radar, pp->ypos+1, pp->xpos*2  ); waddch(radar, '|'); break;
+			case 5: wmove(radar, pp->ypos+1, pp->xpos*2-1); waddch(radar, '/'); break;
+			case 6: wmove(radar, pp->ypos,   pp->xpos*2-2); waddch(radar, '-'); waddch(radar, '-'); break;
+			case 7: wmove(radar, pp->ypos-1, pp->xpos*2-1); waddch(radar, '\\'); break;
+		}
+
+		wattrset(radar, 0);
 	}
 	wrefresh(radar);
 	planewin();
@@ -116,9 +183,30 @@ init_gr()
 	static char	buffer[BUFSIZ];
 
 	initscr();
+	start_color();
+/* Here You can adjust any color for the screen elements.
+ * At the moment colors are hardcoded,
+ * but if someone wants to have own color set,
+ * we can read the color pairs from an .rc file.
+ */
+	init_pair(COL_FRAME,    COLOR_BLUE,    COLOR_BLACK);
+	init_pair(COL_GRASS,    COLOR_GREEN,   COLOR_BLACK);
+	init_pair(COL_ROUTE,    COLOR_BLUE,    COLOR_BLACK);
+	init_pair(COL_EXIT,     COLOR_CYAN,    COLOR_BLUE);
+	init_pair(COL_AIRPT,    COLOR_GREEN,   COLOR_BLUE);
+	init_pair(COL_BEACN,    COLOR_MAGENTA, COLOR_BLUE);
+	init_pair(COL_PL_PR_1,  COLOR_YELLOW,  COLOR_YELLOW);
+	init_pair(COL_PL_JT_1,  COLOR_RED,     COLOR_RED);
+	init_pair(COL_PL_PR_0,  COLOR_YELLOW,  COLOR_BLACK);
+	init_pair(COL_PL_JT_0,  COLOR_RED,     COLOR_BLACK);
+	init_pair(COL_FUEL,     COLOR_MAGENTA, COLOR_BLACK);
+	init_pair(COL_HEAD,     COLOR_CYAN,    COLOR_CYAN);
+	init_pair(COL_VECTR_PR, COLOR_YELLOW,  COLOR_BLACK);
+	init_pair(COL_VECTR_JT, COLOR_RED,     COLOR_BLACK);
+
 	setbuf(stdout, buffer);
 	input = newwin(INPUT_LINES, COLS - PLANE_COLS, LINES - INPUT_LINES, 0);
-	credit = newwin(INPUT_LINES, PLANE_COLS, LINES - INPUT_LINES, 
+	credit = newwin(INPUT_LINES, PLANE_COLS, LINES - INPUT_LINES,
 		COLS - PLANE_COLS);
 	planes = newwin(LINES - INPUT_LINES, PLANE_COLS, 0, COLS - PLANE_COLS);
 }
@@ -150,7 +238,7 @@ setup_screen(scp)
 	}
 	wmove(credit, INPUT_LINES / 2, 1);
 	waddstr(credit, AUTHOR_STR);
-
+	wattron(radar, COLOR_PAIR(COL_GRASS));
 	for (i = 1; i < scp->height - 1; i++) {
 		for (j = 1; j < scp->width - 1; j++) {
 			wmove(radar, i, j * 2);
@@ -162,6 +250,7 @@ setup_screen(scp)
 	 * Draw the lines first, since people like to draw lines
 	 * through beacons and exit points.
 	 */
+	wattron(radar, COLOR_PAIR(COL_ROUTE));
 	str[0] = C_LINE;
 	for (i = 0; i < scp->num_lines; i++) {
 		str[1] = ' ';
@@ -169,6 +258,7 @@ setup_screen(scp)
 			scp->line[i].p2.x, scp->line[i].p2.y, str);
 	}
 
+	wattron(radar, COLOR_PAIR(COL_FRAME));
 	str[0] = C_TOPBOTTOM;
 	str[1] = C_TOPBOTTOM;
 	wmove(radar, 0, 0);
@@ -190,6 +280,7 @@ setup_screen(scp)
 		waddch(radar, C_LEFTRIGHT);
 	}
 
+	wattron(radar, COLOR_PAIR(COL_BEACN)|A_BOLD);
 	str[0] = C_BEACON;
 	for (i = 0; i < scp->num_beacons; i++) {
 		str[1] = '0' + i;
@@ -197,11 +288,13 @@ setup_screen(scp)
 		waddstr(radar, str);
 	}
 
+	wattron(radar, COLOR_PAIR(COL_EXIT)|A_BOLD);
 	for (i = 0; i < scp->num_exits; i++) {
 		wmove(radar, scp->exit[i].y, scp->exit[i].x * 2);
 		waddch(radar, '0' + i);
 	}
 
+	wattron(radar, COLOR_PAIR(COL_AIRPT));
 	airstr = "^?>?v?<?";
 	for (i = 0; i < scp->num_airports; i++) {
 		str[0] = airstr[scp->airport[i].dir];
@@ -209,7 +302,8 @@ setup_screen(scp)
 		wmove(radar, scp->airport[i].y, scp->airport[i].x * 2);
 		waddstr(radar, str);
 	}
-	
+
+	wattrset(radar,0);
 	overwrite(radar, cleanradar);
 	wrefresh(radar);
 	wrefresh(credit);
@@ -336,6 +430,7 @@ planewin()
 {
 	PLANE	*pp;
 	int	warning = 0;
+	char curcmd[20];
 
 #ifdef BSD
 	werase(planes);
@@ -346,16 +441,42 @@ planewin()
 #ifdef SYSV
 	wclrtobot(planes);
 #endif
-	wprintw(planes, "Time: %-4d Safe: %d", clck, safe_planes);
+  wprintw(planes, "Time: ");
+	wattrset(planes, A_BOLD);
+	wprintw(planes, "%-4d", clck);
+	wattrset(planes, 0);
+	wprintw(planes, " Safe: ");
+	wattrset(planes, A_BOLD);
+	wprintw(planes, "%d", safe_planes);
+	wattrset(planes, 0);
 	wmove(planes, 2, 0);
 
-	waddstr(planes, "pl dt  comm");
+  wattron(planes, COLOR_PAIR(COL_HEAD)|A_BOLD);
+	waddstr(planes, "pl dt  comm"); wattrset(planes, 0);
 	for (pp = air.head; pp != NULL; pp = pp->next) {
 		if (waddch(planes, '\n') == ERR) {
 			warning++;
 			break;
 		}
-		waddstr(planes, command(pp));
+		sprintf(curcmd,"%s",command(pp));
+// In the plane list match the plane color to the one on the radar
+		if ((curcmd[0] > 64) && (curcmd[0] < 91)) {
+			wattron(planes, COLOR_PAIR(COL_PL_PR_1)|A_BOLD);
+		} else {
+			wattron(planes, COLOR_PAIR(COL_PL_JT_1)|A_BOLD);
+		}
+		waddch(planes, curcmd[0]); waddch(planes, curcmd[1]);
+		wattron(planes, COLOR_PAIR(COL_FUEL));
+		waddch(planes, curcmd[2]);
+// In the plane list match the destination color to the one on the radar
+		if (curcmd[3] == 'A') {
+			wattron(planes, COLOR_PAIR(COL_AIRPT));
+		} else {
+			wattron(planes, COLOR_PAIR(COL_EXIT));
+		}
+		waddch(planes, curcmd[3]); waddch(planes, curcmd[4]);
+		wattrset(planes, 0);
+		waddstr(planes, curcmd+5);
 	}
 	waddch(planes, '\n');
 	for (pp = ground.head; pp != NULL; pp = pp->next) {
@@ -363,7 +484,23 @@ planewin()
 			warning++;
 			break;
 		}
-		waddstr(planes, command(pp));
+		sprintf(curcmd,"%s",command(pp));
+		if ((curcmd[0] > 64) && (curcmd[0] < 91)) {
+			wattron(planes, COLOR_PAIR(COL_PL_PR_1)|A_BOLD);
+		} else {
+			wattron(planes, COLOR_PAIR(COL_PL_JT_1)|A_BOLD);
+		}
+		waddch(planes, curcmd[0]); waddch(planes, curcmd[1]);
+		wattron(planes, COLOR_PAIR(COL_FUEL));
+		waddch(planes, curcmd[2]);
+		if (curcmd[3] == 'A') {
+			wattron(planes, COLOR_PAIR(COL_AIRPT));
+		} else {
+			wattron(planes, COLOR_PAIR(COL_EXIT));
+		}
+		waddch(planes, curcmd[3]); waddch(planes, curcmd[4]);
+		wattrset(planes, 0);
+		waddstr(planes, curcmd+5);
 	}
 	if (warning) {
 		wmove(planes, LINES - INPUT_LINES - 1, 0);
